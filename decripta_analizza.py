@@ -179,10 +179,121 @@ def analyze_elevator_data(df):
             'exits_count': exits_count
         }
     
+    # 4. NEW: Find people who were together at the same time (same datetime)
+    # Create a datetime column for precise matching - ensure we have exact time matching
+    df['datetime'] = pd.to_datetime(df['data'].dt.strftime('%Y-%m-%d') + ' ' + df['ora'].dt.strftime('%H:%M:%S'))
+    
+    # First group by datetime to find instances where multiple people were recorded at exactly the same time
+    datetime_groups = df.groupby('datetime')
+    
+    # Then for each datetime, separate by IN and OUT to find people who were together for the same operation
+    cooccurrences = []
+    
+    for dt, group in datetime_groups:
+        # First check for people entering together (Elevator_IN)
+        in_group = group[group['Elevator_IN'] == True]
+        if len(in_group) > 1:  # More than one person entering at the same time
+            people_list = in_group['name'].tolist()
+            cooccurrences.append({
+                'datetime': dt,
+                'date': dt.strftime('%Y-%m-%d'),
+                'time': dt.strftime('%H:%M:%S'),
+                'people': people_list,
+                'count': len(people_list),
+                'direction': 'IN'
+            })
+        
+        # Then check for people exiting together (Elevator_OUT)
+        out_group = group[group['Elevator_OUT'] == True]
+        if len(out_group) > 1:  # More than one person exiting at the same time
+            people_list = out_group['name'].tolist()
+            cooccurrences.append({
+                'datetime': dt,
+                'date': dt.strftime('%Y-%m-%d'),
+                'time': dt.strftime('%H:%M:%S'),
+                'people': people_list,
+                'count': len(people_list),
+                'direction': 'OUT'
+            })
+    
+    # Create DataFrame of co-occurrences
+    cooccurrences_df = pd.DataFrame(cooccurrences) if cooccurrences else pd.DataFrame(
+        columns=['datetime', 'date', 'time', 'people', 'count', 'direction'])
+    
+    # Generate frequency counts for each pair of people being together
+    all_pairs = []
+    if not cooccurrences_df.empty:
+        for idx, row in cooccurrences_df.iterrows():
+            people_list = row['people']
+            # Generate all possible pairs from the people in this group
+            for i in range(len(people_list)):
+                for j in range(i+1, len(people_list)):
+                    all_pairs.append({
+                        'person1': people_list[i],
+                        'person2': people_list[j],
+                        'datetime': row['datetime'],
+                        'date': row['date'],
+                        'time': row['time'],
+                        'direction': row['direction']
+                    })
+    
+    pairs_df = pd.DataFrame(all_pairs) if all_pairs else pd.DataFrame(
+        columns=['person1', 'person2', 'datetime', 'date', 'time', 'direction'])
+    
+    # 5. NEW: Find sequence anomalies (people entering without exiting or vice versa)
+    sequence_anomalies = []
+    unique_persons = df['name'].unique()
+    
+    for person in unique_persons:
+        person_data = df[df['name'] == person].copy()
+        
+        # Sort by datetime for proper sequence analysis
+        person_data = person_data.sort_values('datetime')
+        
+        # Track the expected state (should alternate between IN and OUT)
+        expected_state = None
+        
+        # Iterate through the person's records to find anomalies
+        for idx, row in person_data.iterrows():
+            current_action = 'IN' if row['Elevator_IN'] else 'OUT' if row['Elevator_OUT'] else 'UNKNOWN'
+            
+            # Skip any 'UNKNOWN' states
+            if current_action == 'UNKNOWN':
+                continue
+                
+            # If this is the first action, just set the expected next state
+            if expected_state is None:
+                expected_state = 'OUT' if current_action == 'IN' else 'IN'
+                continue
+                
+            # If the current action doesn't match the expected state, we have an anomaly
+            if current_action != expected_state:
+                anomaly_type = f"{current_action} without previous {expected_state}"
+                
+                sequence_anomalies.append({
+                    'person': person,
+                    'datetime': row['datetime'],
+                    'date': row['datetime'].strftime('%Y-%m-%d'),
+                    'time': row['datetime'].strftime('%H:%M:%S'),
+                    'action': current_action,
+                    'expected': expected_state,
+                    'anomaly_type': anomaly_type
+                })
+            
+            # Update expected state for next action
+            expected_state = 'OUT' if current_action == 'IN' else 'IN'
+    
+    # Create DataFrame for sequence anomalies
+    anomalies_df = pd.DataFrame(sequence_anomalies) if sequence_anomalies else pd.DataFrame(
+        columns=['person', 'datetime', 'date', 'time', 'action', 'expected', 'anomaly_type'])
+    
     return {
         'frequency_by_day': frequency_by_day,
         'user_frequency': user_frequency,
-        'user_details': user_details
+        'user_details': user_details,
+        'cooccurrences': cooccurrences_df,
+        'pairs': pairs_df,
+        'anomalies': anomalies_df  # New result with sequence anomalies
     }
 
 # Disable menu in sidebar
@@ -292,10 +403,12 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
         st.dataframe(decrypted_df)
     
     # Tabs for requested visualizations
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "IN/OUT Frequencies by Day", 
         "Top 10 Frequent Users", 
-        "Individual User Details"
+        "Individual User Details",
+        "People Together",
+        "Sequence Anomalies"  # New tab for anomalies
     ])
     
     # Tab 1: IN/OUT Frequencies by day
@@ -457,6 +570,281 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
                     st.info("No stay duration recorded for this user.")
             else:
                 st.info("No stay duration data available for this user.")
+    
+    # Tab 4: NEW - People who were together
+    with tab4:
+        st.subheader("People Detected Together")
+        
+        # Get co-occurrence data
+        cooccurrences_df = analysis['cooccurrences']
+        pairs_df = analysis['pairs']
+        
+        if not cooccurrences_df.empty:
+            # Show summary metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Group Detections", len(cooccurrences_df))
+            with col2:
+                st.metric("Maximum Group Size", cooccurrences_df['count'].max())
+            with col3:
+                unique_pairs = len(pairs_df.groupby(['person1', 'person2']))
+                st.metric("Unique Pairs", unique_pairs)
+            
+            # Main view: All groups detected together
+            st.subheader("All Group Detections")
+            
+            # Format data for display
+            display_df = cooccurrences_df.copy()
+            display_df['people_list'] = display_df['people'].apply(lambda x: ", ".join(x))
+            display_df = display_df[['date', 'time', 'people_list', 'count', 'direction']]
+            display_df = display_df.sort_values(['date', 'time'])
+            display_df.columns = ['Date', 'Time', 'People', 'Group Size', 'Direction']
+            
+            # Add filters
+            st.write("Filter results:")
+            col1, col2 = st.columns(2)
+            with col1:
+                min_group_size = st.number_input("Minimum group size:", min_value=2, max_value=int(cooccurrences_df['count'].max()), value=2)
+            with col2:
+                direction_filter = st.radio("Direction:", options=["All", "IN", "OUT"], horizontal=True)
+            
+            # Apply filters
+            filtered_df = display_df[display_df['Group Size'] >= min_group_size]
+            if direction_filter != "All":
+                filtered_df = filtered_df[filtered_df['Direction'] == direction_filter]
+            
+            st.write(f"Showing {len(filtered_df)} results out of {len(display_df)} total.")
+            st.dataframe(filtered_df)
+            
+            # Most frequent pairs section
+            if not pairs_df.empty:
+                st.subheader("Most Frequent Pairs")
+                
+                # Count frequency of each pair
+                pair_counts = pairs_df.groupby(['person1', 'person2']).size().reset_index(name='frequency')
+                pair_counts = pair_counts.sort_values('frequency', ascending=False)
+                
+                # Create a readable pair name
+                pair_counts['pair'] = pair_counts.apply(lambda x: f"{x['person1']} & {x['person2']}", axis=1)
+                
+                # Display top 15 pairs
+                top_pairs = pair_counts.head(15)
+                
+                # Create chart
+                chart = alt.Chart(top_pairs).mark_bar().encode(
+                    x=alt.X('frequency:Q', title='Times seen together'),
+                    y=alt.Y('pair:N', title='', sort='-x'),
+                    tooltip=['pair', 'frequency']
+                ).properties(
+                    width=700,
+                    height=400,
+                    title='Most frequently seen together'
+                )
+                
+                st.altair_chart(chart, use_container_width=True)
+                
+                # Explore specific pairs
+                st.subheader("Explore a Specific Pair")
+                
+                pair_options = pair_counts['pair'].tolist()
+                selected_pair = st.selectbox("Select a pair to see details:", pair_options)
+                
+                if selected_pair:
+                    person1, person2 = selected_pair.split(" & ")
+                    
+                    # Filter data for this pair
+                    pair_instances = pairs_df[
+                        ((pairs_df['person1'] == person1) & (pairs_df['person2'] == person2)) | 
+                        ((pairs_df['person1'] == person2) & (pairs_df['person2'] == person1))
+                    ]
+                    
+                    # Create a readable version for display
+                    display_data = pair_instances[['date', 'time', 'direction']].copy()
+                    display_data = display_data.sort_values('date')
+                    display_data.columns = ['Date', 'Time', 'Direction']
+                    
+                    st.write(f"All {len(display_data)} instances when {selected_pair} were together:")
+                    st.dataframe(display_data)
+                    
+                    # Summary of movement patterns
+                    movement_summary = display_data['Direction'].value_counts().reset_index()
+                    movement_summary.columns = ['Direction', 'Count']
+                    
+                    if len(movement_summary) > 0:
+                        # Create pie chart of directions
+                        chart = alt.Chart(movement_summary).mark_arc().encode(
+                            theta=alt.Theta(field="Count", type="quantitative"),
+                            color=alt.Color(field="Direction", type="nominal", 
+                                           scale=alt.Scale(domain=['IN', 'OUT'], 
+                                                          range=['#5276A7', '#57A44C'])),
+                            tooltip=['Direction', 'Count']
+                        ).properties(
+                            width=300,
+                            height=300,
+                            title=f'Movement patterns of {selected_pair}'
+                        )
+                        
+                        st.altair_chart(chart)
+                
+                # User search functionality
+                st.subheader("Search for a Person")
+                search_person = st.text_input("Enter a person's name:")
+                
+                if search_person:
+                    # Find all pairs involving this person
+                    person_pairs = pairs_df[
+                        (pairs_df['person1'] == search_person) | 
+                        (pairs_df['person2'] == search_person)
+                    ]
+                    
+                    if len(person_pairs) > 0:
+                        # Get list of people this person was with
+                        companions = []
+                        for _, row in person_pairs.iterrows():
+                            if row['person1'] == search_person:
+                                companions.append(row['person2'])
+                            else:
+                                companions.append(row['person1'])
+                        
+                        # Count frequency of each companion
+                        companion_counts = pd.Series(companions).value_counts().reset_index()
+                        companion_counts.columns = ['Person', 'Times together']
+                        
+                        st.write(f"{search_person} was detected with {len(companion_counts)} different people:")
+                        st.dataframe(companion_counts)
+                    else:
+                        st.info(f"{search_person} was never detected with other people.")
+            else:
+                st.info("No pairs data available.")
+        else:
+            st.info("No instances found where multiple people were detected at the same time.")
+    
+    # Tab 5: NEW - Sequence Anomalies
+    with tab5:
+        st.subheader("Sequence Anomalies")
+        st.write("""
+        This tab shows people who entered the elevator without first exiting, 
+        or who exited without first entering. These anomalies might indicate 
+        unusual behavior or issues with the detection system.
+        """)
+        
+        # Get anomalies data
+        anomalies_df = analysis['anomalies']
+        
+        if not anomalies_df.empty:
+            # Show summary statistics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Anomalies", len(anomalies_df))
+            with col2:
+                st.metric("People with Anomalies", anomalies_df['person'].nunique())
+            with col3:
+                # Count by anomaly type
+                anomaly_counts = anomalies_df['anomaly_type'].value_counts()
+                in_without_out = anomaly_counts.get('IN without previous OUT', 0)
+                out_without_in = anomaly_counts.get('OUT without previous IN', 0)
+                
+                if in_without_out > out_without_in:
+                    most_common = "IN without OUT"
+                else:
+                    most_common = "OUT without IN"
+                
+                st.metric("Most Common Type", most_common)
+            
+            # Add filters
+            st.write("Filter results:")
+            col1, col2 = st.columns(2)
+            with col1:
+                anomaly_type_filter = st.radio(
+                    "Anomaly type:", 
+                    options=["All", "IN without previous OUT", "OUT without previous IN"],
+                    horizontal=True
+                )
+            with col2:
+                search_person = st.text_input("Search for specific person:")
+            
+            # Apply filters
+            filtered_df = anomalies_df.copy()
+            
+            if anomaly_type_filter == "IN without previous OUT":
+                filtered_df = filtered_df[filtered_df['anomaly_type'] == 'IN without previous OUT']
+            elif anomaly_type_filter == "OUT without previous IN":
+                filtered_df = filtered_df[filtered_df['anomaly_type'] == 'OUT without previous IN']
+                
+            if search_person:
+                filtered_df = filtered_df[filtered_df['person'].str.contains(search_person, case=False)]
+            
+            # Create display dataframe
+            display_df = filtered_df[['person', 'date', 'time', 'action', 'expected', 'anomaly_type']].copy()
+            display_df.columns = ['Person', 'Date', 'Time', 'Action', 'Expected Action', 'Anomaly Type']
+            
+            # Sort by person and datetime
+            display_df = display_df.sort_values(['Person', 'Date', 'Time'])
+            
+            # Show results
+            st.write(f"Showing {len(display_df)} results out of {len(anomalies_df)} total.")
+            st.dataframe(display_df)
+            
+            # Summary by person
+            st.subheader("Summary by Person")
+            
+            # Count anomalies by person
+            person_counts = anomalies_df.groupby('person').size().reset_index(name='count')
+            person_counts = person_counts.sort_values('count', ascending=False)
+            
+            # Show top 15 people with most anomalies
+            if len(person_counts) > 0:
+                top_anomalies = person_counts.head(15)
+                
+                # Create chart
+                chart = alt.Chart(top_anomalies).mark_bar().encode(
+                    x=alt.X('count:Q', title='Number of anomalies'),
+                    y=alt.Y('person:N', title='', sort='-x'),
+                    tooltip=['person', 'count']
+                ).properties(
+                    width=700,
+                    height=400,
+                    title='People with most sequence anomalies'
+                )
+                
+                st.altair_chart(chart, use_container_width=True)
+                
+                # Add details for specific person
+                st.subheader("Details by Person")
+                person_list = person_counts['person'].tolist()
+                selected_person = st.selectbox("Select a person:", person_list)
+                
+                if selected_person:
+                    # Get anomalies for selected person
+                    person_anomalies = anomalies_df[anomalies_df['person'] == selected_person]
+                    person_display = person_anomalies[['date', 'time', 'action', 'expected', 'anomaly_type']].copy()
+                    person_display.columns = ['Date', 'Time', 'Action', 'Expected Action', 'Anomaly Type']
+                    
+                    # Sort by date and time
+                    person_display = person_display.sort_values(['Date', 'Time'])
+                    
+                    # Show table
+                    st.write(f"Anomalies detected for {selected_person}:")
+                    st.dataframe(person_display)
+                    
+                    # Show summary by type
+                    anomaly_types = person_anomalies['anomaly_type'].value_counts().reset_index()
+                    anomaly_types.columns = ['Type', 'Count']
+                    
+                    # Create chart
+                    pie = alt.Chart(anomaly_types).mark_arc().encode(
+                        theta=alt.Theta(field="Count", type="quantitative"),
+                        color=alt.Color(field="Type", type="nominal"),
+                        tooltip=['Type', 'Count']
+                    ).properties(
+                        width=300,
+                        height=300,
+                        title=f'Anomaly types for {selected_person}'
+                    )
+                    
+                    st.altair_chart(pie)
+        else:
+            st.info("No sequence anomalies detected in the data.")
 
 # Button to reset view
 if st.session_state.decryption_done:
