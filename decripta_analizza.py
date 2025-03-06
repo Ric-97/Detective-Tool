@@ -240,7 +240,7 @@ def analyze_elevator_data(df):
     pairs_df = pd.DataFrame(all_pairs) if all_pairs else pd.DataFrame(
         columns=['person1', 'person2', 'datetime', 'date', 'time', 'direction'])
     
-    # 5. NEW: Find sequence anomalies (people entering without exiting or vice versa)
+    # 5. NEW: Find sequence anomalies (OUT without subsequent IN and IN without previous OUT)
     sequence_anomalies = []
     unique_persons = df['name'].unique()
     
@@ -250,38 +250,67 @@ def analyze_elevator_data(df):
         # Sort by datetime for proper sequence analysis
         person_data = person_data.sort_values('datetime')
         
-        # Track the expected state (should alternate between IN and OUT)
-        expected_state = None
+        # Convert to list of records for easier processing
+        records = person_data.to_dict('records')
         
-        # Iterate through the person's records to find anomalies
-        for idx, row in person_data.iterrows():
-            current_action = 'IN' if row['Elevator_IN'] else 'OUT' if row['Elevator_OUT'] else 'UNKNOWN'
+        # Skip if no records
+        if not records:
+            continue
+        
+        # Process first record - check if it's an IN without previous OUT
+        first_record = records[0]
+        first_action = 'IN' if first_record['Elevator_IN'] else 'OUT' if first_record['Elevator_OUT'] else 'UNKNOWN'
+        
+        if first_action == 'IN':
+            # First action is IN - this is normal for the first record
+            last_action = 'IN'
+        elif first_action == 'OUT':
+            # First action is OUT - this is normal (the person might have entered before monitoring started)
+            last_action = 'OUT'
+        else:
+            # Unknown action - skip
+            last_action = None
+        
+        # Process each subsequent record to find anomalies
+        for i in range(1, len(records)):
+            current_record = records[i]
+            current_action = 'IN' if current_record['Elevator_IN'] else 'OUT' if current_record['Elevator_OUT'] else 'UNKNOWN'
             
-            # Skip any 'UNKNOWN' states
+            # Skip unknown actions
             if current_action == 'UNKNOWN':
                 continue
                 
-            # If this is the first action, just set the expected next state
-            if expected_state is None:
-                expected_state = 'OUT' if current_action == 'IN' else 'IN'
-                continue
-                
-            # If the current action doesn't match the expected state, we have an anomaly
-            if current_action != expected_state:
-                anomaly_type = f"{current_action} without previous {expected_state}"
-                
+            # Check for anomalies
+            if current_action == 'IN' and last_action == 'IN':
+                # IN without previous OUT - someone entered twice without exiting
                 sequence_anomalies.append({
                     'person': person,
-                    'datetime': row['datetime'],
-                    'date': row['datetime'].strftime('%Y-%m-%d'),
-                    'time': row['datetime'].strftime('%H:%M:%S'),
+                    'datetime': current_record['datetime'],
+                    'date': current_record['datetime'].strftime('%Y-%m-%d'),
+                    'time': current_record['datetime'].strftime('%H:%M:%S'),
                     'action': current_action,
-                    'expected': expected_state,
-                    'anomaly_type': anomaly_type
+                    'last_action': last_action,
+                    'anomaly_type': 'IN without previous OUT'
+                })
+            elif current_action == 'OUT' and last_action == 'OUT':
+                # OUT without subsequent IN - someone exited twice without entering between
+                sequence_anomalies.append({
+                    'person': person,
+                    'datetime': records[i-1]['datetime'],  # The previous OUT record
+                    'date': records[i-1]['datetime'].strftime('%Y-%m-%d'),
+                    'time': records[i-1]['datetime'].strftime('%H:%M:%S'),
+                    'action': last_action,
+                    'next_action': current_action,
+                    'anomaly_type': 'OUT without subsequent IN'
                 })
             
-            # Update expected state for next action
-            expected_state = 'OUT' if current_action == 'IN' else 'IN'
+            # Update last action
+            last_action = current_action
+        
+        # Check the last record for an unmatched OUT
+        if len(records) > 0 and last_action == 'OUT':
+            # Last action is OUT - this is normal (the person might not have returned yet)
+            pass
     
     # Create DataFrame for sequence anomalies
     anomalies_df = pd.DataFrame(sequence_anomalies) if sequence_anomalies else pd.DataFrame(
@@ -364,7 +393,7 @@ def decrypt_data():
             st.error(f"Error during decryption: {error_info}")
             st.session_state.decryption_done = False
     except Exception as e:
-        st.error(f"An error occurred: {str(e)}")
+        st.error("WRONG PASSWORD")
         st.session_state.decryption_done = False
 
 # Button to start decryption
@@ -723,9 +752,11 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
     with tab5:
         st.subheader("Sequence Anomalies")
         st.write("""
-        This tab shows people who entered the elevator without first exiting, 
-        or who exited without first entering. These anomalies might indicate 
-        unusual behavior or issues with the detection system.
+        This tab shows two types of sequence anomalies:
+        1. **IN without previous OUT**: People who entered the elevator without having exited before
+        2. **OUT without subsequent IN**: People who exited the elevator but never came back in
+        
+        These anomalies might indicate unusual behavior, gaps in monitoring, or issues with the detection system.
         """)
         
         # Get anomalies data
@@ -742,12 +773,12 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
                 # Count by anomaly type
                 anomaly_counts = anomalies_df['anomaly_type'].value_counts()
                 in_without_out = anomaly_counts.get('IN without previous OUT', 0)
-                out_without_in = anomaly_counts.get('OUT without previous IN', 0)
+                out_without_in = anomaly_counts.get('OUT without subsequent IN', 0)
                 
                 if in_without_out > out_without_in:
-                    most_common = "IN without OUT"
+                    most_common = "IN without previous OUT"
                 else:
-                    most_common = "OUT without IN"
+                    most_common = "OUT without subsequent IN"
                 
                 st.metric("Most Common Type", most_common)
             
@@ -757,7 +788,7 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
             with col1:
                 anomaly_type_filter = st.radio(
                     "Anomaly type:", 
-                    options=["All", "IN without previous OUT", "OUT without previous IN"],
+                    options=["All", "IN without previous OUT", "OUT without subsequent IN"],
                     horizontal=True
                 )
             with col2:
@@ -768,15 +799,34 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
             
             if anomaly_type_filter == "IN without previous OUT":
                 filtered_df = filtered_df[filtered_df['anomaly_type'] == 'IN without previous OUT']
-            elif anomaly_type_filter == "OUT without previous IN":
-                filtered_df = filtered_df[filtered_df['anomaly_type'] == 'OUT without previous IN']
+            elif anomaly_type_filter == "OUT without subsequent IN":
+                filtered_df = filtered_df[filtered_df['anomaly_type'] == 'OUT without subsequent IN']
                 
             if search_person:
                 filtered_df = filtered_df[filtered_df['person'].str.contains(search_person, case=False)]
             
-            # Create display dataframe
-            display_df = filtered_df[['person', 'date', 'time', 'action', 'expected', 'anomaly_type']].copy()
-            display_df.columns = ['Person', 'Date', 'Time', 'Action', 'Expected Action', 'Anomaly Type']
+            # Create display dataframe, handle different column structures
+            cols_to_display = ['person', 'date', 'time', 'anomaly_type']
+            if 'action' in filtered_df.columns:
+                cols_to_display.append('action')
+            if 'last_action' in filtered_df.columns:
+                cols_to_display.append('last_action')
+            if 'next_action' in filtered_df.columns:
+                cols_to_display.append('next_action')
+            
+            display_df = filtered_df[cols_to_display].copy()
+            # Rename columns based on which ones are present
+            column_mapping = {
+                'person': 'Person',
+                'date': 'Date',
+                'time': 'Time',
+                'anomaly_type': 'Anomaly Type',
+                'action': 'Action',
+                'last_action': 'Previous Action',
+                'next_action': 'Next Action'
+            }
+            
+            display_df.columns = [column_mapping.get(col, col) for col in display_df.columns]
             
             # Sort by person and datetime
             display_df = display_df.sort_values(['Person', 'Date', 'Time'])
@@ -817,8 +867,29 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
                 if selected_person:
                     # Get anomalies for selected person
                     person_anomalies = anomalies_df[anomalies_df['person'] == selected_person]
-                    person_display = person_anomalies[['date', 'time', 'action', 'expected', 'anomaly_type']].copy()
-                    person_display.columns = ['Date', 'Time', 'Action', 'Expected Action', 'Anomaly Type']
+                    
+                    # Determine which columns to display
+                    display_cols = ['date', 'time', 'anomaly_type']
+                    if 'action' in person_anomalies.columns:
+                        display_cols.append('action')
+                    if 'last_action' in person_anomalies.columns:
+                        display_cols.append('last_action')
+                    if 'next_action' in person_anomalies.columns:
+                        display_cols.append('next_action')
+                    
+                    person_display = person_anomalies[display_cols].copy()
+                    
+                    # Set proper column names
+                    column_mapping = {
+                        'date': 'Date',
+                        'time': 'Time',
+                        'anomaly_type': 'Anomaly Type',
+                        'action': 'Action',
+                        'last_action': 'Previous Action',
+                        'next_action': 'Next Action'
+                    }
+                    
+                    person_display.columns = [column_mapping[col] for col in display_cols]
                     
                     # Sort by date and time
                     person_display = person_display.sort_values(['Date', 'Time'])
