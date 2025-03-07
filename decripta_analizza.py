@@ -409,7 +409,40 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
     
     # Show decrypted dataframe
     st.success("Decryption completed!")
-    
+
+    # Function to convert dataframe to csv for download
+    def convert_df_to_csv(df):
+        # Convert dataframe to csv
+        return df.to_csv(index=False).encode('utf-8')
+
+    # After displaying decrypted data, add the download button
+    if st.session_state.decryption_done and st.session_state.decrypted_data is not None:
+        # This should be placed after line 600 (after displaying raw data preview)
+        with st.expander("Download Decrypted Data", expanded=True):
+            st.write("Click the button below to download the decrypted data as a CSV file.")
+            decrypted_df = st.session_state.decrypted_data
+            csv = convert_df_to_csv(decrypted_df)
+            
+            # Create download button
+            st.download_button(
+                label="Download Decrypted Data as CSV",
+                data=csv,
+                file_name="decrypted_elevator_data.csv",
+                mime="text/csv",
+            )
+            
+            # Also provide Excel download option
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                decrypted_df.to_excel(writer, sheet_name='Decrypted Data', index=False)
+            
+            st.download_button(
+                label="Download Decrypted Data as Excel",
+                data=buffer.getvalue(),
+                file_name="decrypted_elevator_data.xlsx",
+                mime="application/vnd.ms-excel",
+            )
+        
     # Show basic statistics
     st.subheader("Data Information")
     col1, col2, col3 = st.columns(3)
@@ -927,9 +960,3 @@ if st.session_state.decryption_done:
         st.session_state.selected_user = None
         # Force page refresh
         st.rerun()
-
-# Footer notes
-st.markdown("---")
-st.caption("""
-**Note:** Data can only be viewed in this application and cannot be exported.
-""")
