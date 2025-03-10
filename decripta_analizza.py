@@ -422,26 +422,27 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
             st.write("Click the button below to download the decrypted data as a CSV file.")
             decrypted_df = st.session_state.decrypted_data
             csv = convert_df_to_csv(decrypted_df)
-            
-            # Create download button
-            st.download_button(
-                label="Download Decrypted Data as CSV",
-                data=csv,
-                file_name="decrypted_elevator_data.csv",
-                mime="text/csv",
-            )
-            
-            # Also provide Excel download option
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                decrypted_df.to_excel(writer, sheet_name='Decrypted Data', index=False)
-            
-            st.download_button(
-                label="Download Decrypted Data as Excel",
-                data=buffer.getvalue(),
-                file_name="decrypted_elevator_data.xlsx",
-                mime="application/vnd.ms-excel",
-            )
+            botton1, botton2 = st.columns(2)
+            with botton1:
+                # Create download button
+                st.download_button(
+                    label="Download Decrypted Data as CSV",
+                    data=csv,
+                    file_name="decrypted_elevator_data.csv",
+                    mime="text/csv",
+                )
+
+            with botton2:
+                # Also provide Excel download option
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    decrypted_df.to_excel(writer, sheet_name='Decrypted Data', index=False)
+                st.download_button(
+                    label="Download Decrypted Data as Excel",
+                    data=buffer.getvalue(),
+                    file_name="decrypted_elevator_data.xlsx",
+                    mime="application/vnd.ms-excel",
+                )
         
     # Show basic statistics
     st.subheader("Data Information")
@@ -536,6 +537,102 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
         st.write("Data in table format:")
         st.dataframe(chart_data)
     
+    # # Tab 3: Individual user details
+    # with tab3:
+    #     st.subheader("Individual User Details")
+        
+    #     # User selector
+    #     user_list = list(analysis['user_frequency'].index)
+        
+    #     # If no user is already selected, take the first from the list
+    #     if st.session_state.selected_user is None and user_list:
+    #         st.session_state.selected_user = user_list[0]
+        
+    #     # Widget to select user
+    #     selected_user = st.selectbox(
+    #         "Select a user:",
+    #         options=user_list,
+    #         index=user_list.index(st.session_state.selected_user) if st.session_state.selected_user in user_list else 0
+    #     )
+        
+    #     # Update session state
+    #     st.session_state.selected_user = selected_user
+        
+    #     if selected_user:
+    #         user_data = analysis['user_details'][selected_user]
+            
+    #         # Show general statistics
+    #         col1, col2, col3, col4 = st.columns(4)
+    #         with col1:
+    #             st.metric("Total Registrations", user_data['total_visits'])
+    #         with col2:
+    #             st.metric("Entries", user_data['entries_count'])
+    #         with col3:
+    #             st.metric("Exits", user_data['exits_count'])
+    #         with col4:
+    #             st.metric("Average Time (min)", user_data['avg_duration'])
+            
+    #         # 1. Registration distribution over time
+    #         st.subheader("Registration Distribution")
+            
+    #         if not user_data['registrations_by_date'].empty:
+    #             # Prepare data for chart
+    #             reg_data = user_data['registrations_by_date'].reset_index()
+    #             reg_data.columns = ['Date', 'Count']
+    #             reg_data['Date'] = reg_data['Date'].astype(str)
+                
+    #             # Create chart
+    #             chart = alt.Chart(reg_data).mark_bar().encode(
+    #                 x=alt.X('Date:N', title='Date'),
+    #                 y=alt.Y('Count:Q', title='Number of registrations'),
+    #                 color=alt.Color('Count:Q', scale=alt.Scale(scheme='blues')),
+    #                 tooltip=['Date', 'Count']
+    #             ).properties(
+    #                 width=700,
+    #                 height=300,
+    #                 title=f'Registration distribution for {selected_user}'
+    #             )
+                
+    #             st.altair_chart(chart, use_container_width=True)
+    #         else:
+    #             st.info("No registration data available for this user.")
+            
+    #         # 2. Stay duration
+    #         st.subheader("Stay Duration")
+            
+    #         if not user_data['stay_durations'].empty:
+    #             # Prepare data for chart
+    #             dur_data = user_data['stay_durations'].copy()
+                
+    #             if len(dur_data) > 0:
+    #                 # Explicitly convert the date column to datetime and then to formatted string
+    #                 dur_data['date'] = pd.to_datetime(dur_data['date']).dt.strftime('%Y-%m-%d')
+                    
+    #                 # Rename columns
+    #                 dur_data.columns = ['Date', 'Entry Time', 'Exit Time', 'Duration (min)']
+                    
+    #                 # Use nominal field for dates
+    #                 chart = alt.Chart(dur_data).mark_circle(size=100).encode(
+    #                     x=alt.X('Date:N', title='Date', sort=None),  # Use nominal type and maintain date order
+    #                     y=alt.Y('Duration (min):Q', title='Duration (minutes)'),
+    #                     size=alt.Size('Duration (min):Q', legend=None),
+    #                     color=alt.Color('Duration (min):Q', scale=alt.Scale(scheme='viridis')),
+    #                     tooltip=['Date', 'Entry Time', 'Exit Time', 'Duration (min)']
+    #                 ).properties(
+    #                     width=700,
+    #                     height=300,
+    #                     title=f'Stay durations for {selected_user}'
+    #                 )
+                    
+    #                 st.altair_chart(chart, use_container_width=True)
+                    
+    #                 # Show data in table format
+    #                 st.write("Stay duration details:")
+    #                 st.dataframe(dur_data)
+    #             else:
+    #                 st.info("No stay duration recorded for this user.")
+    #         else:
+    #             st.info("No stay duration data available for this user.")
     # Tab 3: Individual user details
     with tab3:
         st.subheader("Individual User Details")
@@ -561,15 +658,13 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
             user_data = analysis['user_details'][selected_user]
             
             # Show general statistics
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3 = st.columns(3)
             with col1:
                 st.metric("Total Registrations", user_data['total_visits'])
             with col2:
                 st.metric("Entries", user_data['entries_count'])
             with col3:
                 st.metric("Exits", user_data['exits_count'])
-            with col4:
-                st.metric("Average Time (min)", user_data['avg_duration'])
             
             # 1. Registration distribution over time
             st.subheader("Registration Distribution")
@@ -595,43 +690,6 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
                 st.altair_chart(chart, use_container_width=True)
             else:
                 st.info("No registration data available for this user.")
-            
-            # 2. Stay duration
-            st.subheader("Stay Duration")
-            
-            if not user_data['stay_durations'].empty:
-                # Prepare data for chart
-                dur_data = user_data['stay_durations'].copy()
-                
-                if len(dur_data) > 0:
-                    # Explicitly convert the date column to datetime and then to formatted string
-                    dur_data['date'] = pd.to_datetime(dur_data['date']).dt.strftime('%Y-%m-%d')
-                    
-                    # Rename columns
-                    dur_data.columns = ['Date', 'Entry Time', 'Exit Time', 'Duration (min)']
-                    
-                    # Use nominal field for dates
-                    chart = alt.Chart(dur_data).mark_circle(size=100).encode(
-                        x=alt.X('Date:N', title='Date', sort=None),  # Use nominal type and maintain date order
-                        y=alt.Y('Duration (min):Q', title='Duration (minutes)'),
-                        size=alt.Size('Duration (min):Q', legend=None),
-                        color=alt.Color('Duration (min):Q', scale=alt.Scale(scheme='viridis')),
-                        tooltip=['Date', 'Entry Time', 'Exit Time', 'Duration (min)']
-                    ).properties(
-                        width=700,
-                        height=300,
-                        title=f'Stay durations for {selected_user}'
-                    )
-                    
-                    st.altair_chart(chart, use_container_width=True)
-                    
-                    # Show data in table format
-                    st.write("Stay duration details:")
-                    st.dataframe(dur_data)
-                else:
-                    st.info("No stay duration recorded for this user.")
-            else:
-                st.info("No stay duration data available for this user.")
     
     # Tab 4: NEW - People who were together
     with tab4:
@@ -789,7 +847,7 @@ if st.session_state.decryption_done and st.session_state.decrypted_data is not N
         1. **IN without previous OUT**: People who entered the elevator without having exited before
         2. **OUT without subsequent IN**: People who exited the elevator but never came back in
         
-        These anomalies might indicate unusual behavior, gaps in monitoring, or issues with the detection system.
+        These anomalies might indicate unusual behavior, someone may have used the stairs to avoid being noticed.
         """)
         
         # Get anomalies data
