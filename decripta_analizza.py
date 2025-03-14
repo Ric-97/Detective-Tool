@@ -327,7 +327,7 @@ def analyze_elevator_data(df):
 
 # Disable menu in sidebar
 st.set_page_config(
-    page_title="Detective Tool", 
+    page_title="Datamindset Tool", 
     page_icon="🔐",
     layout="wide",
     initial_sidebar_state="collapsed"
